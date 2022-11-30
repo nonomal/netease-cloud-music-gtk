@@ -6,7 +6,7 @@
 use gettextrs::gettext;
 use gio::Settings;
 use glib::{
-    ParamSpec, ParamSpecBoolean, ParamSpecDouble, ParamSpecEnum, ParamSpecUInt,
+    ParamSpec, ParamSpecBoolean, ParamSpecDouble, ParamSpecEnum, ParamSpecUInt, ParamSpecUInt64,
     Sender, Value,
 };
 use gst::ClockTime;
@@ -231,6 +231,7 @@ impl PlayerControls {
         // let sender = sender_.clone();
         // player_sig.connect_buffering(move |_, percent| {});
     }
+
     // msec -> microseconds
     pub fn gst_position_update(&self, msec: u64) {
         let imp = self.imp();
@@ -249,6 +250,7 @@ impl PlayerControls {
         seek_scale.set_value(msec as f64);
         imp.progress_time_label.get().set_label(&duration);
     }
+
     pub fn gst_duration_changed(&self, msec: u64) {
         let imp = self.imp();
         let sec = msec / 10u64.pow(6);
@@ -258,6 +260,8 @@ impl PlayerControls {
         imp.seek_scale.set_range(0.0, msec as f64);
         imp.duration_label.get().set_label(&duration);
 
+        self.set_property("duration", sec);
+
         /*
          * not update_metadata length
          */
@@ -265,6 +269,7 @@ impl PlayerControls {
         //     imp.mpris.get().unwrap().update_metadata(&si, msec as i64);
         // }
     }
+
     pub fn gst_state_changed(&self, state: PlayState) {
         let imp = self.imp();
         let play_button = imp.play_button.get();
@@ -275,16 +280,21 @@ impl PlayerControls {
             _ => (),
         }
     }
+
     pub fn gst_cache_download_complete(&self, loc: String) {
-        if let Some(si) = self.get_current_song() {
-            let rate = self.property::<u32>("music-rate");
-            let src = path::PathBuf::from(loc);
-            let dst = crate::path::get_music_cache_path(si.id, rate);
-            thread::spawn(|| {
-                if let Err(err) = fs::copy(src, dst) {
-                    log::error!("{:?}", err);
-                }
-            });
+        let duration: u64 = self.property("duration");
+        // 不缓存小于 30 秒时长的乐曲(vip试听)
+        if duration > 30 {
+            if let Some(si) = self.get_current_song() {
+                let rate = self.property::<u32>("music-rate");
+                let src = path::PathBuf::from(loc);
+                let dst = crate::path::get_music_cache_path(si.id, rate);
+                thread::spawn(|| {
+                    if let Err(err) = fs::copy(src, dst) {
+                        log::error!("{:?}", err);
+                    }
+                });
+            }
         }
     }
 
@@ -396,6 +406,7 @@ impl PlayerControls {
             self.set_property("loops", state);
         }
     }
+
     pub fn set_shuffle(&self, shuffle: bool) {
         let imp = self.imp();
         match shuffle {
@@ -407,6 +418,7 @@ impl PlayerControls {
             }
         }
     }
+
     pub fn set_volume(&self, value: f64) {
         let old: f64 = self.property("volume");
         if (old * 100.0).round() as i64 != (value * 100.0).round() as i64 {
@@ -481,9 +493,7 @@ impl PlayerControls {
                 cover_img_url: songinfo.pic_url,
                 author: String::new(),
             };
-            sender
-                .send(Action::ToAlbumPage(songlist.to_owned()))
-                .unwrap();
+            sender.send(Action::ToAlbumPage(songlist)).unwrap();
         }
     }
 }
@@ -541,6 +551,7 @@ mod imp {
         volume: Cell<f64>,
         loops: Cell<LoopsState>,
         music_rate: Cell<u32>,
+        duration: Cell<u64>,
 
         like: Cell<bool>,
     }
@@ -747,6 +758,7 @@ mod imp {
                     ParamSpecDouble::builder("volume").build(),
                     ParamSpecEnum::builder("loops", LoopsState::default()).build(),
                     ParamSpecUInt::builder("music-rate").build(),
+                    ParamSpecUInt64::builder("duration").build(),
                     ParamSpecBoolean::builder("like").readwrite().build(),
                 ]
             });
@@ -767,6 +779,10 @@ mod imp {
                     let val = value.get().unwrap();
                     self.music_rate.replace(val);
                 }
+                "duration" => {
+                    let val = value.get().unwrap();
+                    self.duration.replace(val);
+                }
                 "like" => {
                     let like = value.get().expect("The value needs to be of type `bool`.");
                     self.like.replace(like);
@@ -780,6 +796,7 @@ mod imp {
                 "volume" => self.volume.get().to_value(),
                 "loops" => self.loops.get().to_value(),
                 "music-rate" => self.music_rate.get().to_value(),
+                "duration" => self.duration.get().to_value(),
                 "like" => self.like.get().to_value(),
                 n => unimplemented!("{}", n),
             }
